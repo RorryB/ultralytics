@@ -59,6 +59,19 @@ from ultralytics.utils.torch_utils import (
     unwrap_model,
 )
 
+# Optional PerforatedAI integration - automatically enabled if installed
+USING_PERFORATED = False
+try:
+    from perforatedai import utils_perforatedai as UPA
+    from perforatedai import globals_perforatedai as GPA
+
+    USING_PERFORATED = True
+    LOGGER.info(
+        "PerforatedAI integration enabled (custom early stopping with model restructuring)"
+    )
+except ImportError:
+    LOGGER.debug("PerforatedAI not available, using standard early stopping")
+
 
 class BaseTrainer:
     """
@@ -66,6 +79,10 @@ class BaseTrainer:
 
     This class provides the foundation for training YOLO models, handling the training loop, validation, checkpointing,
     and various training utilities. It supports both single-GPU and multi-GPU distributed training.
+
+    Optional PerforatedAI Integration:
+        Automatically enabled when PerforatedAI is installed. Replaces standard early stopping
+        with intelligent model restructuring and custom convergence criteria.
 
     Attributes:
         args (SimpleNamespace): Configuration for the trainer.
@@ -122,7 +139,11 @@ class BaseTrainer:
         """
         self.hub_session = overrides.pop("session", None)  # HUB
         self.args = get_cfg(cfg, overrides)
-        self.check_resume(overrides)
+
+        # Check resume - disabled when using PerforatedAI (handles its own state management)
+        if not USING_PERFORATED:
+            self.check_resume(overrides)
+
         self.device = select_device(self.args.device)
         # Update "-1" devices so post-training val does not repeat search
         self.args.device = os.getenv("CUDA_VISIBLE_DEVICES") if "cuda" in str(self.device) else str(self.device)
@@ -266,6 +287,10 @@ class BaseTrainer:
         # Compile model
         self.model = attempt_compile(self.model, device=self.device, mode=self.args.compile)
 
+        # Initialize PerforatedAI
+        if USING_PERFORATED:
+            self.model = UPA.initialize_pai(self.model)
+
         # Freeze layers
         freeze_list = (
             self.args.freeze
@@ -345,10 +370,32 @@ class BaseTrainer:
             decay=weight_decay,
             iterations=iterations,
         )
+        if USING_PERFORATED:
+            GPA.pai_tracker.set_optimizer_instance(self.optimizer)
         # Scheduler
         self._setup_scheduler()
-        self.stopper, self.stop = EarlyStopping(patience=self.args.patience), False
-        self.resume_training(ckpt)
+
+        # Configure early stopping based on PerforatedAI availability
+        if USING_PERFORATED:
+            # Use custom early stopping via UPA.add_validation_score instead of built-in EarlyStopping
+            # Keep the stopper for compatibility but it won't be used for stopping decisions
+            self.stopper, self.stop = (
+                EarlyStopping(patience=float("inf")),
+                False,
+            )  # Effectively disabled
+            self._using_custom_early_stopping = (
+                True  # Flag to indicate custom early stopping is active
+            )
+        else:
+            # Use standard early stopping
+            self.stopper, self.stop = EarlyStopping(patience=self.args.patience), False
+            self._using_custom_early_stopping = False
+
+        # Resume training - disabled when using PerforatedAI (handles its own state management)
+        if not (
+            USING_PERFORATED and GPA is not None and self._using_custom_early_stopping
+        ):
+            self.resume_training(ckpt)
         self.scheduler.last_epoch = self.start_epoch - 1  # do not move
         self.run_callbacks("on_pretrain_routine_end")
 
@@ -467,10 +514,92 @@ class BaseTrainer:
                 final_epoch = epoch + 1 >= self.epochs
                 self.ema.update_attr(self.model, include=["yaml", "nc", "args", "names", "stride", "class_weights"])
 
-                # Validation
-                if self.args.val or final_epoch or self.stopper.possible_stop or self.stop:
+                # Validation - run validation regularly to allow add_validation_score to monitor progress
+                # When using PerforatedAI custom early stopping, validate every epoch for better restructuring decisions
+                should_validate = (
+                    self.args.val
+                    or final_epoch
+                    or self.stop
+                    or (USING_PERFORATED and self._using_custom_early_stopping)
+                )
+                if should_validate:
                     self._clear_memory(threshold=0.5)  # prevent VRAM spike
                     self.metrics, self.fitness = self.validate()
+
+                    # Conditional processing based on PerforatedAI availability
+                    if USING_PERFORATED and self._using_custom_early_stopping:
+                        # Process validation score for potential model restructuring
+                        newmodel, restructured, training_complete = (
+                            GPA.pai_tracker.add_validation_score(
+                                self.fitness, self.model
+                            )
+                        )
+
+                        # Update model if restructuring occurred
+                        if restructured and newmodel is not None:
+                            # Replace model with new one
+                            old_model = self.model
+                            self.model = newmodel.to(self.device)
+
+                            # Handle DDP if applicable
+                            if self.world_size > 1:
+                                self.model = nn.parallel.DistributedDataParallel(
+                                    self.model,
+                                    device_ids=[RANK],
+                                    find_unused_parameters=True,
+                                )
+
+                            # Reinitialize optimizer for new model
+                            weight_decay = (
+                                self.args.weight_decay
+                                * self.batch_size
+                                * self.accumulate
+                                / self.args.nbs
+                            )
+                            iterations = (
+                                math.ceil(
+                                    len(self.train_loader.dataset)
+                                    / max(self.batch_size, self.args.nbs)
+                                )
+                                * self.epochs
+                            )
+                            self.optimizer = self.build_optimizer(
+                                model=self.model,
+                                name=self.args.optimizer,
+                                lr=self.args.lr0,
+                                momentum=self.args.momentum,
+                                decay=weight_decay,
+                                iterations=iterations,
+                            )
+                            GPA.pai_tracker.set_optimizer_instance(self.optimizer)
+                            # Reinitialize scheduler
+                            self._setup_scheduler()
+                            self.scheduler.last_epoch = -1  # Reset to start learning rate schedule from beginning
+
+                            # Reinitialize EMA if it exists
+                            if hasattr(self, "ema") and self.ema is not None:
+                                self.ema = ModelEMA(self.model)
+
+                            # Clean up old model and memory
+                            del old_model
+                            (
+                                torch.cuda.empty_cache()
+                                if torch.cuda.is_available()
+                                else None
+                            )
+
+                            # Ensure training continues after restructuring
+                            self.stop = False
+                            LOGGER.info(
+                                "Model restructured, optimizer/scheduler reinitialized"
+                            )
+
+                        # Only stop when training_complete is True - ignore all other early stopping
+                        if training_complete:
+                            LOGGER.info(
+                                "Training completed due to validation score criteria"
+                            )
+                            self.stop = True
 
             # NaN recovery
             if self._handle_nan_recovery(epoch):
@@ -479,14 +608,25 @@ class BaseTrainer:
             self.nan_recovery_attempts = 0
             if RANK in {-1, 0}:
                 self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
-                self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
+                # Conditional early stopping logic based on PerforatedAI availability
+                if USING_PERFORATED and self._using_custom_early_stopping:
+                    # Only stop when add_validation_score sets self.stop = True
+                    # Let PerforatedAI handle ALL stopping decisions, including final epochs
+                    pass  # self.stop is controlled entirely by add_validation_score
+                else:
+                    # Use standard early stopping
+                    self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
                 if self.args.time:
                     self.stop |= (time.time() - self.train_time_start) > (self.args.time * 3600)
 
-                # Save model
-                if self.args.save or final_epoch:
-                    self.save_model()
-                    self.run_callbacks("on_model_save")
+                # Save model - disabled when using PerforatedAI (handles its own checkpointing)
+                if not (
+                    USING_PERFORATED
+                    and self._using_custom_early_stopping
+                ):
+                    if self.args.save or final_epoch:
+                        self.save_model()
+                        self.run_callbacks("on_model_save")
 
             # Scheduler
             t = time.time()
@@ -514,7 +654,14 @@ class BaseTrainer:
             # Do final val with best.pt
             seconds = time.time() - self.train_time_start
             LOGGER.info(f"\n{epoch - self.start_epoch + 1} epochs completed in {seconds / 3600:.3f} hours.")
-            self.final_eval()
+
+            # Final evaluation - disabled when using PerforatedAI (handles its own evaluation)
+            if not (
+                USING_PERFORATED
+                and self._using_custom_early_stopping
+            ):
+                self.final_eval()
+
             if self.args.plots:
                 self.plot_metrics()
             self.run_callbacks("on_train_end")

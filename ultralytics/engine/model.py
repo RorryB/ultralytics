@@ -25,6 +25,15 @@ from ultralytics.utils import (
     checks,
 )
 
+# Optional PerforatedAI integration - automatically enabled if installed
+USING_PERFORATED = False
+
+try:
+    from perforatedai import utils_perforatedai as GPA
+    USING_PERFORATED = True
+except ImportError:
+    pass
+
 
 class Model(torch.nn.Module):
     """
@@ -801,8 +810,13 @@ class Model(torch.nn.Module):
         # Update model and cfg after training
         if RANK in {-1, 0}:
             ckpt = self.trainer.best if self.trainer.best.exists() else self.trainer.last
-            self.model, self.ckpt = load_checkpoint(ckpt)
-            self.overrides = self._reset_ckpt_args(self.model.args)
+            # Disable checkpoint loading when using PerforatedAI (handles its own state management)
+            if (USING_PERFORATED and GPA is None):
+                self.model, self.ckpt = load_checkpoint(ckpt)
+                self.overrides = self._reset_ckpt_args(self.model.args)
+            else:
+                # When using PerforatedAI, keep current model state
+                self.ckpt = None
             self.metrics = getattr(self.trainer.validator, "metrics", None)  # TODO: no metrics returned by DDP
         return self.metrics
 
