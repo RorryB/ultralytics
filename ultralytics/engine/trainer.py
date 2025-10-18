@@ -287,10 +287,6 @@ class BaseTrainer:
         # Compile model
         self.model = attempt_compile(self.model, device=self.device, mode=self.args.compile)
 
-        # Initialize PerforatedAI
-        if USING_PERFORATED:
-            self.model = UPA.initialize_pai(self.model)
-
         # Freeze layers
         freeze_list = (
             self.args.freeze
@@ -323,6 +319,11 @@ class BaseTrainer:
         if RANK > -1 and self.world_size > 1:  # DDP
             dist.broadcast(self.amp.int(), src=0)  # broadcast from rank 0 to all other ranks; gloo errors with boolean
         self.amp = bool(self.amp)  # as boolean
+
+        # Initialize PerforatedAI BEFORE creating scaler
+        if USING_PERFORATED:
+            self.model = UPA.initialize_pai(self.model)
+
         self.scaler = (
             torch.amp.GradScaler("cuda", enabled=self.amp) if TORCH_2_4 else torch.cuda.amp.GradScaler(enabled=self.amp)
         )
@@ -620,10 +621,7 @@ class BaseTrainer:
                     self.stop |= (time.time() - self.train_time_start) > (self.args.time * 3600)
 
                 # Save model - disabled when using PerforatedAI (handles its own checkpointing)
-                if not (
-                    USING_PERFORATED
-                    and self._using_custom_early_stopping
-                ):
+                if not (USING_PERFORATED and self._using_custom_early_stopping):
                     if self.args.save or final_epoch:
                         self.save_model()
                         self.run_callbacks("on_model_save")
@@ -656,10 +654,7 @@ class BaseTrainer:
             LOGGER.info(f"\n{epoch - self.start_epoch + 1} epochs completed in {seconds / 3600:.3f} hours.")
 
             # Final evaluation - disabled when using PerforatedAI (handles its own evaluation)
-            if not (
-                USING_PERFORATED
-                and self._using_custom_early_stopping
-            ):
+            if not (USING_PERFORATED and self._using_custom_early_stopping):
                 self.final_eval()
 
             if self.args.plots:
