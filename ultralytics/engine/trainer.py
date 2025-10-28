@@ -322,7 +322,13 @@ class BaseTrainer:
 
         # Initialize PerforatedAI BEFORE creating scaler
         if USING_PERFORATED:
-            self.model = UPA.initialize_pai(self.model)
+            if hasattr(GPA, "loading") and GPA.loading is not None:
+                self.model = UPA.initialize_pai(self.model, save_name="lowerLR")
+                self.model = UPA.load_system(
+                    self.model, GPA.loading[0], GPA.loading[1], True
+                )
+            else:
+                self.model = UPA.initialize_pai(self.model)
 
         self.scaler = (
             torch.amp.GradScaler("cuda", enabled=self.amp) if TORCH_2_4 else torch.cuda.amp.GradScaler(enabled=self.amp)
