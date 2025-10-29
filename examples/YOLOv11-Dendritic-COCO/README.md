@@ -35,9 +35,9 @@ python yolov11_dendritic_coco.py
 
 ## 👀 Step 3: Check out the Results
 
-We're attaching the raw graphs so you can be sure you're replicating our exact results.  But for each image, you really only need to take a look at the top left graph.
+We're attaching the raw outputs so you can be sure you're replicating our exact results.  But you really only need to take a look at the top left graph.
 
-Graph 1: This shows the fitness score across epochs.  Each vertical blue line represents an epoch where dendrites are added.  Dendrites are added when the validation score stops improving.  When that occurs the previously recorded best model is loaded before adding dendrites and continuing training.  The extra blue section of the main training line that extends past the vertical blue lines shows the scores that were calculated but then overwritten when the previous best model was loaded.  This are retained to show what results would look like if dendrites were not added.
+Graph 1: This shows the fitness score across epochs.  Each vertical blue line represents an epoch where dendrites are added.  Dendrites are added when the validation score stops improving.  When that occurs the previously recorded best model is loaded before adding dendrites and continuing training.  The extra blue section of the main training line that extends past the vertical blue lines shows the scores that were calculated but then overwritten when the previous best model was loaded.  These are retained to show what results would look like if dendrites were not added.
 
 !["Dendrite Output"](DendriteOutput.png "Dendrite Output")
 
@@ -45,7 +45,7 @@ Graph 1: This shows the fitness score across epochs.  Each vertical blue line re
 
 ### What is Dendritic Optimization?
 
-The artificial neuron was invented in 1943, and it hasn't evolved since. That outdated model still powers today's AI.  Modern neuroscience shows that biological dendrites, not neurons, are the true workhorses of intelligence. Artificial dendrites offer a new path forward for ML engineers, overcoming the economic and technical limitations of legacy neural networks. Perforated's dendrite-enhanced neurons are the building blocks of AI 2.0, empower each individual neuron in your model to achieve better decisions on the same dataset with the same underlying architecture.
+The artificial neuron was invented in 1943, and it hasn't evolved since. That outdated model still powers today's AI.  Modern neuroscience shows that biological dendrites, not neurons, are the true workhorses of intelligence. Artificial dendrites offer a new path forward for ML engineers, overcoming the economic and technical limitations of legacy neural networks. Perforated's dendrite-enhanced neurons are the building blocks of AI 2.0, empowering each individual neuron in your model to achieve better decisions on the same dataset with the same underlying architecture.
 
 ### Why Optimize YOLO with Dendrites?
 
@@ -53,7 +53,7 @@ Dendritic Intelligence can reduce the parameter count of networks by up to 90% w
 
 ### How Can I Troubleshoot Issues?
 
-For debugging, check out the [PyTorch Dendritic AI Github](https://github.com/PerforatedAI/PerforatedAI) or get in touch with their team on their [website](https://www.perforatedai.com).
+For debugging, check out the [PyTorch Dendritic AI GitHub](https://github.com/PerforatedAI/PerforatedAI) or get in touch through their [website](https://www.perforatedai.com).
 
 ## 🤝 Contributing
 
