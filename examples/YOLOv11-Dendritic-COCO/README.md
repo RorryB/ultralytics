@@ -35,11 +35,7 @@ python yolov11_dendritic_coco.py
 
 ## 👀 Step 3: Check out the Results
 
-We're attaching the raw outputs so you can be sure you're replicating our exact results.  But you really only need to take a look at the top left graph.
-
-Graph 1: This shows the fitness score across epochs.  Each vertical blue line represents an epoch where dendrites are added.  Dendrites are added when the validation score stops improving.  When that occurs the previously recorded best model is loaded before adding dendrites and continuing training.  The extra blue section of the main training line that extends past the vertical blue lines shows the scores that were calculated but then overwritten when the previous best model was loaded.  These are retained to show what results would look like if dendrites were not added.
-
-!["Dendrite Output"](DendriteOutput.png "Dendrite Output")
+Currently working on debugging this implementation.
 
 ## ❓ Frequently Asked Questions (FAQ)
 
